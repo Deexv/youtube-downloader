@@ -362,6 +362,28 @@
       align-items: center;
     }
 
+    .resume-pill {
+      background: rgba(58, 134, 255, 0.15);
+      color: #60a5fa;
+      font-weight: 600;
+      padding: 2px 7px;
+      border-radius: 4px;
+      font-size: 11px;
+      display: inline-flex;
+      align-items: center;
+    }
+
+    .completed-pill {
+      background: rgba(148, 163, 184, 0.15);
+      color: #cbd5e1;
+      font-weight: 600;
+      padding: 2px 7px;
+      border-radius: 4px;
+      font-size: 11px;
+      display: inline-flex;
+      align-items: center;
+    }
+
     /* Progress Panel */
     .progress-section {
       display: none;
@@ -665,6 +687,7 @@
       const fetchBtn = document.getElementById('fetchBtn');
       const spinner = document.getElementById('fetchBtnSpinner');
       const btnText = document.getElementById('fetchBtnText');
+      const outputDir = document.getElementById('outputDirInput').value.trim();
 
       fetchBtn.disabled = true;
       spinner.classList.remove('hidden');
@@ -674,7 +697,7 @@
         const response = await fetch('/api/fetch', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ url })
+          body: JSON.stringify({ url, output_dir: outputDir })
         });
         const result = await response.json();
 
@@ -795,6 +818,19 @@
 
         subtext.appendChild(durSpan);
         subtext.appendChild(sizeSpan);
+
+        if (item.has_partial) {
+          const resSpan = document.createElement('span');
+          resSpan.className = 'resume-pill';
+          resSpan.textContent = `Resume available: ${item.partial_formatted} on disk`;
+          subtext.appendChild(resSpan);
+        } else if (item.is_completed) {
+          const compSpan = document.createElement('span');
+          compSpan.className = 'completed-pill';
+          compSpan.textContent = 'Already on disk';
+          subtext.appendChild(compSpan);
+        }
+
         subtext.appendChild(chanSpan);
 
         details.appendChild(videoTitle);
@@ -851,11 +887,13 @@
       const quality = document.getElementById('qualitySelect').value;
 
       let totalBytes = 0;
+      let resumeCount = 0;
       if (currentMediaData) {
         selectedIndices.forEach(idx => {
           const item = currentMediaData.entries[idx];
           if (item) {
             totalBytes += getItemBytesForQuality(item, quality);
+            if (item.has_partial) resumeCount++;
           }
         });
       }
@@ -864,10 +902,11 @@
 
       const totalSizeStr = totalBytes > 0 ? ` • Est. Total: <strong>~${formatBytes(totalBytes)}</strong>` : '';
       const btnSizeStr = totalBytes > 0 ? ` • ~${formatBytes(totalBytes)}` : '';
+      const resumeNotice = resumeCount > 0 ? `<div style="font-size: 12px; color: #60a5fa; margin-top: 4px;">Detected ${resumeCount} unfinished download(s). Will resume from where it left off instead of restarting.</div>` : '';
 
       document.getElementById('totalSelectionText').innerHTML = count === 0
         ? 'Please select at least one video to proceed.'
-        : `Ready to download <strong>${count}</strong> selected video(s)${totalSizeStr}`;
+        : `Ready to download <strong>${count}</strong> selected video(s)${totalSizeStr}${resumeNotice}`;
 
       const btn = document.getElementById('downloadBtn');
       btn.innerHTML = `Download Selected (${count}${btnSizeStr})`;

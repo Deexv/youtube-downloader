@@ -131,13 +131,40 @@ class TestYouTubeDownloader(unittest.TestCase):
         os.rmdir(temp_dir)
 
     def test_network_options_and_resumption(self):
-        from downloader import get_base_ydl_opts
+        import os
+        from downloader import check_existing_media_file, get_base_ydl_opts, resolve_output_template
+
         opts = get_base_ydl_opts()
         self.assertTrue(opts.get("continuedl"))
         self.assertFalse(opts.get("nopart"))
         self.assertGreaterEqual(opts.get("socket_timeout", 0), 30)
         self.assertGreaterEqual(opts.get("retries", 0), 10)
         self.assertGreaterEqual(opts.get("http_chunk_size", 0), 1048576)
+
+        # Test partial file detection across restart
+        temp_dir = "/tmp/test_resume_detection"
+        os.makedirs(temp_dir, exist_ok=True)
+        title = "My Partial Video"
+        video_id = "part123"
+
+        # Create a partial download file (.part)
+        part_path = os.path.join(temp_dir, f"{title} [{video_id}].f399.mp4.part")
+        with open(part_path, "wb") as f:
+            f.write(b"X" * 102400)
+
+        # Check existing media file status
+        status = check_existing_media_file(temp_dir, title, video_id)
+        self.assertTrue(status["has_partial"])
+        self.assertEqual(status["partial_bytes"], 102400)
+        self.assertFalse(status["is_completed"])
+
+        # Template should NOT increment to (1) when only .part file exists
+        tmpl = resolve_output_template(temp_dir, title, video_id, "auto_rename")
+        self.assertEqual(tmpl, os.path.join(temp_dir, "%(title)s [%(id)s].%(ext)s"))
+
+        # Clean up
+        os.remove(part_path)
+        os.rmdir(temp_dir)
 
 
 if __name__ == "__main__":

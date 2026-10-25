@@ -38,12 +38,13 @@ def fetch_info():
     data = request.get_json(force=True, silent=True) or {}
     url = (data.get("url") or "").strip()
     cookies_browser = data.get("cookies_browser")
+    output_dir = (data.get("output_dir") or "").strip() or DEFAULT_DOWNLOAD_DIR
 
     if not url:
         return jsonify({"success": False, "error": "Please provide a YouTube video or playlist URL."}), 400
 
     try:
-        info = extract_media_info(url, cookies_browser=cookies_browser)
+        info = extract_media_info(url, cookies_browser=cookies_browser, output_dir=output_dir)
         return jsonify({"success": True, "data": info})
     except Exception as e:
         error_msg = str(e)

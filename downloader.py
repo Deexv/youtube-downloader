@@ -145,11 +145,53 @@ def get_base_ydl_opts() -> Dict[str, Any]:
     return opts
 
 
-def extract_media_info(url: str, cookies_browser: Optional[str] = None) -> Dict[str, Any]:
+def check_existing_media_file(output_dir: str, title: str, video_id: str) -> Dict[str, Any]:
+    """
+    Check if a completed file or unfinished (.part / .ytdl) download exists in output_dir.
+    """
+    if not os.path.exists(output_dir):
+        return {
+            "has_partial": False,
+            "partial_bytes": 0,
+            "partial_formatted": "0 B",
+            "is_completed": False,
+            "completed_filename": "",
+        }
+
+    sanitized_title = yt_dlp.utils.sanitize_filename(title)
+    base = f"{sanitized_title} [{video_id}]"
+
+    try:
+        all_files = os.listdir(output_dir)
+    except Exception:
+        all_files = []
+
+    part_files = [f for f in all_files if f.startswith(base) and (f.endswith(".part") or f.endswith(".ytdl"))]
+    completed_files = [f for f in all_files if f.startswith(base) and not f.endswith(".part") and not f.endswith(".ytdl")]
+
+    part_bytes = sum(
+        os.path.getsize(os.path.join(output_dir, pf))
+        for pf in part_files
+        if os.path.isfile(os.path.join(output_dir, pf))
+    )
+
+    return {
+        "has_partial": len(part_files) > 0,
+        "partial_bytes": part_bytes,
+        "partial_formatted": format_bytes(part_bytes),
+        "is_completed": len(completed_files) > 0,
+        "completed_filename": completed_files[0] if completed_files else "",
+    }
+
+
+def extract_media_info(url: str, cookies_browser: Optional[str] = None, output_dir: Optional[str] = None) -> Dict[str, Any]:
     """
     Extract video or playlist information from a given URL without downloading.
-    Returns normalized structure with entries, thumbnails, duration, and download size maps.
+    Returns normalized structure with entries, thumbnails, duration, size maps, and partial/resume status.
     """
+    if not output_dir:
+        output_dir = os.path.join(os.path.expanduser("~"), "Downloads", "YouTubeDownloads")
+
     opts = get_base_ydl_opts()
     opts["extract_flat"] = "in_playlist"
     opts["skip_download"] = True
@@ -187,10 +229,13 @@ def extract_media_info(url: str, cookies_browser: Optional[str] = None) -> Dict[
             estimated_sizes = estimate_quality_sizes_from_duration(duration)
             formatted_sizes = {q: format_bytes(sz) for q, sz in estimated_sizes.items()}
 
+            item_title = item.get("title") or f"Video #{index}"
+            file_status = check_existing_media_file(output_dir, item_title, entry_id)
+
             entries.append({
                 "id": entry_id,
                 "index": index,
-                "title": item.get("title") or f"Video #{index}",
+                "title": item_title,
                 "url": video_url,
                 "duration": duration,
                 "duration_formatted": format_duration(duration),
@@ -198,6 +243,11 @@ def extract_media_info(url: str, cookies_browser: Optional[str] = None) -> Dict[
                 "channel": item.get("channel") or item.get("uploader") or "Unknown Channel",
                 "sizes": estimated_sizes,
                 "sizes_formatted": formatted_sizes,
+                "has_partial": file_status["has_partial"],
+                "partial_bytes": file_status["partial_bytes"],
+                "partial_formatted": file_status["partial_formatted"],
+                "is_completed": file_status["is_completed"],
+                "completed_filename": file_status["completed_filename"],
             })
 
         return {
@@ -227,11 +277,13 @@ def extract_media_info(url: str, cookies_browser: Optional[str] = None) -> Dict[
         exact_sizes = estimate_quality_sizes_from_duration(duration)
 
     formatted_sizes = {q: format_bytes(sz) for q, sz in exact_sizes.items()}
+    video_title = raw_info.get("title") or "YouTube Video"
+    file_status = check_existing_media_file(output_dir, video_title, video_id)
 
     single_entry = {
         "id": video_id,
         "index": 1,
-        "title": raw_info.get("title") or "YouTube Video",
+        "title": video_title,
         "url": video_url,
         "duration": duration,
         "duration_formatted": format_duration(duration),
@@ -239,11 +291,16 @@ def extract_media_info(url: str, cookies_browser: Optional[str] = None) -> Dict[
         "channel": raw_info.get("channel") or raw_info.get("uploader") or "Unknown Channel",
         "sizes": exact_sizes,
         "sizes_formatted": formatted_sizes,
+        "has_partial": file_status["has_partial"],
+        "partial_bytes": file_status["partial_bytes"],
+        "partial_formatted": file_status["partial_formatted"],
+        "is_completed": file_status["is_completed"],
+        "completed_filename": file_status["completed_filename"],
     }
 
     return {
         "type": "video",
-        "title": raw_info.get("title") or "YouTube Video",
+        "title": video_title,
         "id": video_id,
         "channel": raw_info.get("channel") or raw_info.get("uploader") or "Unknown Channel",
         "count": 1,
@@ -251,19 +308,61 @@ def extract_media_info(url: str, cookies_browser: Optional[str] = None) -> Dict[
     }
 
 
+def check_existing_media_file(output_dir: str, title: str, video_id: str) -> Dict[str, Any]:
+    """
+    Check if a completed file or unfinished (.part / .ytdl) download exists in output_dir.
+    """
+    if not os.path.exists(output_dir):
+        return {
+            "has_partial": False,
+            "partial_bytes": 0,
+            "partial_formatted": "0 B",
+            "is_completed": False,
+            "completed_filename": "",
+        }
+
+    sanitized_title = yt_dlp.utils.sanitize_filename(title)
+    base = f"{sanitized_title} [{video_id}]"
+
+    try:
+        all_files = os.listdir(output_dir)
+    except Exception:
+        all_files = []
+
+    part_files = [f for f in all_files if f.startswith(base) and (f.endswith(".part") or f.endswith(".ytdl"))]
+    completed_files = [f for f in all_files if f.startswith(base) and not f.endswith(".part") and not f.endswith(".ytdl")]
+
+    part_bytes = sum(
+        os.path.getsize(os.path.join(output_dir, pf))
+        for pf in part_files
+        if os.path.isfile(os.path.join(output_dir, pf))
+    )
+
+    return {
+        "has_partial": len(part_files) > 0,
+        "partial_bytes": part_bytes,
+        "partial_formatted": format_bytes(part_bytes),
+        "is_completed": len(completed_files) > 0,
+        "completed_filename": completed_files[0] if completed_files else "",
+    }
+
+
 def resolve_output_template(output_dir: str, title: str, video_id: str, on_duplicate: str) -> str:
     """
     Generate an output template path.
-    If on_duplicate == 'auto_rename', checks if any matching file exists and appends (1), (2), etc.
-    If on_duplicate == 'overwrite', overwrites existing files.
+    Only COMPLETED files (excluding temporary .part and .ytdl files) count as duplicates.
+    If an unfinished download (.part file) exists, it targets the same template to resume seamlessly.
     """
     if on_duplicate == "auto_rename" and os.path.exists(output_dir):
         sanitized_title = yt_dlp.utils.sanitize_filename(title)
         base = f"{sanitized_title} [{video_id}]"
-        existing_files = [f for f in os.listdir(output_dir) if f.startswith(base)]
-        if existing_files:
+        existing_completed = [
+            f for f in os.listdir(output_dir)
+            if f.startswith(base) and not f.endswith(".part") and not f.endswith(".ytdl")
+        ]
+        if existing_completed:
             counter = 1
-            while any(f.startswith(f"{base} ({counter})") for f in existing_files):
+            while any(f.startswith(f"{base} ({counter})") and not f.endswith(".part") and not f.endswith(".ytdl") for f in existing_completed):
                 counter += 1
             return os.path.join(output_dir, f"%(title)s [%(id)s] ({counter}).%(ext)s")
     return os.path.join(output_dir, "%(title)s [%(id)s].%(ext)s")
@@ -437,17 +536,28 @@ class DownloadManager:
             video_title = item.get("title", f"Video {idx}")
             video_id = item.get("id", str(idx))
 
+            existing_info = check_existing_media_file(job.output_dir, video_title, video_id)
+            is_resuming = existing_info["has_partial"]
+
             with job.lock:
                 job.current_index = idx
                 job.current_title = video_title
                 job.current_item_id = video_id
                 job.item_percent = 0.0
-                job.item_downloaded_bytes = 0
+                job.item_downloaded_bytes = existing_info["partial_bytes"]
                 job.item_total_bytes = 0
-                job.item_downloaded_str = "0 B"
+                job.item_downloaded_str = existing_info["partial_formatted"]
                 job.item_total_str = "0 B"
-                job.size_progress_str = "Preparing..."
-                job.status_message = f"Downloading item {idx} of {total_items}: {video_title}"
+                job.size_progress_str = (
+                    f"Resuming from {existing_info['partial_formatted']}..."
+                    if is_resuming
+                    else "Preparing..."
+                )
+                job.status_message = (
+                    f"Resuming unfinished download ({existing_info['partial_formatted']} on disk) for: {video_title}"
+                    if is_resuming
+                    else f"Downloading item {idx} of {total_items}: {video_title}"
+                )
 
             stream_state = {
                 "completed_stream_bytes": 0,
