@@ -123,7 +123,15 @@ def get_base_ydl_opts() -> Dict[str, Any]:
     opts: Dict[str, Any] = {
         "quiet": True,
         "no_warnings": False,
-        "remote_components": ["ejs:github"]
+        "remote_components": ["ejs:github"],
+        "socket_timeout": 30,
+        "retries": 20,
+        "fragment_retries": 20,
+        "file_access_retries": 5,
+        "extractor_retries": 5,
+        "continuedl": True,
+        "nopart": False,
+        "http_chunk_size": 10485760,
     }
 
     if ffmpeg_bin:
@@ -501,46 +509,71 @@ class DownloadManager:
                     with job.lock:
                         job.status_message = f"Finished merging {video_title}."
 
-            ydl_opts = get_base_ydl_opts()
-            ydl_opts["overwrites"] = True
-            ydl_opts["progress_hooks"] = [progress_hook]
-            ydl_opts["postprocessor_hooks"] = [postprocessor_hook]
-            ydl_opts["outtmpl"] = resolve_output_template(
+            target_outtmpl = resolve_output_template(
                 job.output_dir,
                 video_title,
                 video_id,
                 job.on_duplicate,
             )
 
+            ydl_opts = get_base_ydl_opts()
+            ydl_opts["overwrites"] = True
+            ydl_opts["continuedl"] = True
+            ydl_opts["nopart"] = False
+            ydl_opts["progress_hooks"] = [progress_hook]
+            ydl_opts["postprocessor_hooks"] = [postprocessor_hook]
+            ydl_opts["outtmpl"] = target_outtmpl
+
             for k, v in format_spec.items():
                 ydl_opts[k] = v
 
-            try:
-                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                    ydl.download([video_url])
+            max_retries = 5
+            download_succeeded = False
+            last_err_msg = ""
 
+            for attempt in range(1, max_retries + 1):
+                if job.is_cancelled:
+                    break
+                try:
+                    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                        ydl.download([video_url])
+                    download_succeeded = True
+                    break
+                except DownloadCancelledException:
+                    with job.lock:
+                        job.status = "cancelled"
+                        job.status_message = "Download cancelled by user"
+                    return
+                except Exception as e:
+                    last_err_msg = str(e)
+                    if "\x1b" in last_err_msg:
+                        import re
+                        last_err_msg = re.sub(r"\x1b\[[0-9;]*m", "", last_err_msg)
+
+                    if attempt < max_retries and not job.is_cancelled:
+                        import time
+                        wait_seconds = min(2 * attempt, 8)
+                        with job.lock:
+                            job.status_message = (
+                                f"Connection interrupted ({last_err_msg}). "
+                                f"Resuming download from where it left off in {wait_seconds}s (attempt {attempt}/{max_retries})..."
+                            )
+                        time.sleep(wait_seconds)
+                    else:
+                        break
+
+            if download_succeeded:
                 with job.lock:
                     job.completed_items.append(video_id)
                     job.batch_completed_bytes += stream_state["completed_stream_bytes"]
                     completed_frac = float(idx)
                     job.total_percent = min(100.0, (completed_frac / total_items) * 100.0)
-
-            except DownloadCancelledException:
-                with job.lock:
-                    job.status = "cancelled"
-                    job.status_message = "Download cancelled by user"
-                return
-
-            except Exception as e:
-                err_msg = str(e)
-                if "\x1b" in err_msg:
-                    import re
-                    err_msg = re.sub(r"\x1b\[[0-9;]*m", "", err_msg)
+            elif not job.is_cancelled:
                 with job.lock:
                     job.failed_items.append({
                         "id": video_id,
                         "title": video_title,
-                        "error": err_msg,
+                        "error": last_err_msg or "Download failed after multiple retries",
                     })
 
         with job.lock:

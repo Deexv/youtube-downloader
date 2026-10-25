@@ -130,6 +130,15 @@ class TestYouTubeDownloader(unittest.TestCase):
         os.remove(existing_file)
         os.rmdir(temp_dir)
 
+    def test_network_options_and_resumption(self):
+        from downloader import get_base_ydl_opts
+        opts = get_base_ydl_opts()
+        self.assertTrue(opts.get("continuedl"))
+        self.assertFalse(opts.get("nopart"))
+        self.assertGreaterEqual(opts.get("socket_timeout", 0), 30)
+        self.assertGreaterEqual(opts.get("retries", 0), 10)
+        self.assertGreaterEqual(opts.get("http_chunk_size", 0), 1048576)
+
 
 if __name__ == "__main__":
     unittest.main()
