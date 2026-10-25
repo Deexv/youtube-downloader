@@ -99,6 +99,37 @@ class TestYouTubeDownloader(unittest.TestCase):
         status_data2 = json.loads(status_res2.data)["data"]
         self.assertIn(status_data2["status"], ["cancelled", "completed", "error"])
 
+    def test_duplicate_file_resolution(self):
+        import os
+        from downloader import resolve_output_template
+
+        temp_dir = "/tmp/test_dup_template"
+        os.makedirs(temp_dir, exist_ok=True)
+
+        title = "My Video"
+        video_id = "abc1234"
+
+        # Case 1: No existing file
+        tmpl1 = resolve_output_template(temp_dir, title, video_id, "auto_rename")
+        self.assertEqual(tmpl1, os.path.join(temp_dir, "%(title)s [%(id)s].%(ext)s"))
+
+        # Create dummy existing file
+        existing_file = os.path.join(temp_dir, f"{title} [{video_id}].mp4")
+        with open(existing_file, "w") as f:
+            f.write("content")
+
+        # Case 2: Existing file with auto_rename -> appends (1)
+        tmpl2 = resolve_output_template(temp_dir, title, video_id, "auto_rename")
+        self.assertEqual(tmpl2, os.path.join(temp_dir, "%(title)s [%(id)s] (1).%(ext)s"))
+
+        # Case 3: Existing file with overwrite -> keeps base template
+        tmpl3 = resolve_output_template(temp_dir, title, video_id, "overwrite")
+        self.assertEqual(tmpl3, os.path.join(temp_dir, "%(title)s [%(id)s].%(ext)s"))
+
+        # Clean up
+        os.remove(existing_file)
+        os.rmdir(temp_dir)
+
 
 if __name__ == "__main__":
     unittest.main()

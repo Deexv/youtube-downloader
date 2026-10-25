@@ -243,6 +243,24 @@ def extract_media_info(url: str, cookies_browser: Optional[str] = None) -> Dict[
     }
 
 
+def resolve_output_template(output_dir: str, title: str, video_id: str, on_duplicate: str) -> str:
+    """
+    Generate an output template path.
+    If on_duplicate == 'auto_rename', checks if any matching file exists and appends (1), (2), etc.
+    If on_duplicate == 'overwrite', overwrites existing files.
+    """
+    if on_duplicate == "auto_rename" and os.path.exists(output_dir):
+        sanitized_title = yt_dlp.utils.sanitize_filename(title)
+        base = f"{sanitized_title} [{video_id}]"
+        existing_files = [f for f in os.listdir(output_dir) if f.startswith(base)]
+        if existing_files:
+            counter = 1
+            while any(f.startswith(f"{base} ({counter})") for f in existing_files):
+                counter += 1
+            return os.path.join(output_dir, f"%(title)s [%(id)s] ({counter}).%(ext)s")
+    return os.path.join(output_dir, "%(title)s [%(id)s].%(ext)s")
+
+
 class DownloadCancelledException(Exception):
     """Raised when a download job is cancelled by the user."""
     pass
@@ -251,11 +269,12 @@ class DownloadCancelledException(Exception):
 class DownloadJob:
     """Represents a download job for one or more videos."""
 
-    def __init__(self, job_id: str, items: List[Dict[str, Any]], quality: str, output_dir: str):
+    def __init__(self, job_id: str, items: List[Dict[str, Any]], quality: str, output_dir: str, on_duplicate: str = "auto_rename"):
         self.job_id = job_id
         self.items = items
         self.quality = quality
         self.output_dir = output_dir
+        self.on_duplicate = on_duplicate
         self.status = "queued"
         self.is_cancelled = False
         self.current_index = 0
@@ -321,7 +340,7 @@ class DownloadManager:
         self.jobs: Dict[str, DownloadJob] = {}
         self.lock = threading.Lock()
 
-    def create_job(self, items: List[Dict[str, Any]], quality: str, output_dir: Optional[str] = None) -> DownloadJob:
+    def create_job(self, items: List[Dict[str, Any]], quality: str, output_dir: Optional[str] = None, on_duplicate: str = "auto_rename") -> DownloadJob:
         if not output_dir:
             home = os.path.expanduser("~")
             output_dir = os.path.join(home, "Downloads", "YouTubeDownloads")
@@ -329,7 +348,7 @@ class DownloadManager:
         os.makedirs(output_dir, exist_ok=True)
 
         job_id = str(uuid.uuid4())
-        job = DownloadJob(job_id, items, quality, output_dir)
+        job = DownloadJob(job_id, items, quality, output_dir, on_duplicate=on_duplicate)
 
         est_total = 0
         for itm in items:
@@ -483,9 +502,15 @@ class DownloadManager:
                         job.status_message = f"Finished merging {video_title}."
 
             ydl_opts = get_base_ydl_opts()
+            ydl_opts["overwrites"] = True
             ydl_opts["progress_hooks"] = [progress_hook]
             ydl_opts["postprocessor_hooks"] = [postprocessor_hook]
-            ydl_opts["outtmpl"] = os.path.join(job.output_dir, "%(title)s [%(id)s].%(ext)s")
+            ydl_opts["outtmpl"] = resolve_output_template(
+                job.output_dir,
+                video_title,
+                video_id,
+                job.on_duplicate,
+            )
 
             for k, v in format_spec.items():
                 ydl_opts[k] = v

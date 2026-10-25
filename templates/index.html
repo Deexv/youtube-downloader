@@ -549,6 +549,14 @@
               </button>
             </div>
           </div>
+
+          <div class="field">
+            <label for="duplicateSelect">If File With Same Name Exists</label>
+            <select id="duplicateSelect">
+              <option value="auto_rename" selected>Auto-rename (save as duplicate e.g. (1))</option>
+              <option value="overwrite">Overwrite / Replace existing file</option>
+            </select>
+          </div>
         </div>
       </form>
     </div>
@@ -875,6 +883,7 @@
 
       const quality = document.getElementById('qualitySelect').value;
       const outputDir = document.getElementById('outputDirInput').value.trim();
+      const onDuplicate = document.getElementById('duplicateSelect').value;
 
       hideAlert();
 
@@ -885,7 +894,8 @@
           body: JSON.stringify({
             items: selectedItems,
             quality: quality,
-            output_dir: outputDir
+            output_dir: outputDir,
+            on_duplicate: onDuplicate
           })
         });
 

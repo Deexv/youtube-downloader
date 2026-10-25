@@ -59,11 +59,17 @@ def start_download():
     items = data.get("items") or []
     quality = data.get("quality") or "best"
     output_dir = (data.get("output_dir") or "").strip() or DEFAULT_DOWNLOAD_DIR
+    on_duplicate = data.get("on_duplicate") or "auto_rename"
 
     if not items:
         return jsonify({"success": False, "error": "No videos selected for download."}), 400
 
-    job = download_manager.create_job(items=items, quality=quality, output_dir=output_dir)
+    job = download_manager.create_job(
+        items=items,
+        quality=quality,
+        output_dir=output_dir,
+        on_duplicate=on_duplicate,
+    )
     return jsonify({
         "success": True,
         "job_id": job.job_id,
