@@ -346,7 +346,20 @@
       font-size: 12px;
       color: var(--text-muted);
       display: flex;
-      gap: 12px;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 10px;
+    }
+
+    .size-pill {
+      background: rgba(16, 185, 129, 0.12);
+      color: #34d399;
+      font-weight: 600;
+      padding: 2px 7px;
+      border-radius: 4px;
+      font-size: 11px;
+      display: inline-flex;
+      align-items: center;
     }
 
     /* Progress Panel */
@@ -387,11 +400,34 @@
     }
 
     .progress-stats {
-      display: flex;
-      justify-content: space-between;
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+      gap: 8px;
       font-size: 13px;
       color: var(--text-muted);
       margin-bottom: 14px;
+      background: #11131a;
+      padding: 10px 14px;
+      border-radius: 6px;
+      border: 1px solid var(--card-border);
+    }
+
+    .stat-item {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+
+    .stat-item .stat-label {
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: #64748b;
+    }
+
+    .stat-item .stat-val {
+      font-weight: 600;
+      color: #e2e8f0;
     }
 
     .status-msg {
@@ -430,9 +466,20 @@
       display: flex;
       justify-content: space-between;
       align-items: center;
+      flex-wrap: wrap;
+      gap: 12px;
       margin-top: 16px;
       padding-top: 16px;
       border-top: 1px solid var(--card-border);
+    }
+
+    .download-meta {
+      font-size: 13px;
+      color: var(--text-muted);
+    }
+
+    .download-meta strong {
+      color: #34d399;
     }
 
     .hidden {
@@ -481,7 +528,7 @@
         <div class="options-grid">
           <div class="field">
             <label for="qualitySelect">Video Quality & Audio</label>
-            <select id="qualitySelect">
+            <select id="qualitySelect" onchange="onQualityChange()">
               <option value="best">Best Available (Highest Resolution)</option>
               <option value="2160">4K Ultra HD (2160p) + Combined Audio</option>
               <option value="1440">2K Quad HD (1440p) + Combined Audio</option>
@@ -516,9 +563,22 @@
         <div id="progressBar" class="progress-bar"></div>
       </div>
       <div class="progress-stats">
-        <span id="progressItemIndex">Item 0 of 0</span>
-        <span id="progressSpeed">Speed: --</span>
-        <span id="progressEta">ETA: --</span>
+        <div class="stat-item">
+          <span class="stat-label">Item</span>
+          <span id="progressItemIndex" class="stat-val">0 of 0</span>
+        </div>
+        <div class="stat-item">
+          <span class="stat-label">Download Size</span>
+          <span id="progressSize" class="stat-val">0 B / 0 B</span>
+        </div>
+        <div class="stat-item">
+          <span class="stat-label">Speed</span>
+          <span id="progressSpeed" class="stat-val">--</span>
+        </div>
+        <div class="stat-item">
+          <span class="stat-label">ETA</span>
+          <span id="progressEta" class="stat-val">--</span>
+        </div>
       </div>
       <div id="statusMessage" class="status-msg">Starting download...</div>
       <div class="progress-actions">
@@ -542,11 +602,13 @@
       </div>
 
       <div id="videoList" class="video-list">
-        <!-- Rendered items will appear here -->
+        <!-- Rendered items appear here -->
       </div>
 
       <div class="download-bar">
-        <span id="totalSelectionText">Select the videos you want to download.</span>
+        <div class="download-meta" id="totalSelectionText">
+          Select videos to download.
+        </div>
         <button type="button" id="downloadBtn" onclick="startDownload()">
           Download Selected (<span id="downloadBtnCount">0</span>)
         </button>
@@ -559,6 +621,19 @@
     let selectedIndices = new Set();
     let currentJobId = null;
     let pollInterval = null;
+
+    function formatBytes(bytes) {
+      if (!bytes || bytes <= 0) return '0 B';
+      const units = ['B', 'KB', 'MB', 'GB'];
+      let val = bytes;
+      for (let i = 0; i < units.length; i++) {
+        if (val < 1024.0) {
+          return `${val.toFixed(1)} ${units[i]}`;
+        }
+        val /= 1024.0;
+      }
+      return `${val.toFixed(2)} TB`;
+    }
 
     function showAlert(message, type = 'error') {
       const box = document.getElementById('alertBox');
@@ -611,11 +686,52 @@
       }
     }
 
+    function getItemSizeForQuality(item, quality) {
+      if (item.sizes_formatted && item.sizes_formatted[quality]) {
+        return item.sizes_formatted[quality];
+      }
+      if (item.sizes && item.sizes[quality]) {
+        return formatBytes(item.sizes[quality]);
+      }
+      if (item.sizes_formatted && item.sizes_formatted['best']) {
+        return item.sizes_formatted['best'];
+      }
+      return 'Estimating...';
+    }
+
+    function getItemBytesForQuality(item, quality) {
+      if (item.sizes && item.sizes[quality]) {
+        return item.sizes[quality];
+      }
+      if (item.sizes && item.sizes['best']) {
+        return item.sizes['best'];
+      }
+      return 0;
+    }
+
+    function onQualityChange() {
+      if (!currentMediaData) return;
+      updateAllItemSizePills();
+      updateSelectionUI();
+    }
+
+    function updateAllItemSizePills() {
+      const quality = document.getElementById('qualitySelect').value;
+      currentMediaData.entries.forEach((item, idx) => {
+        const pill = document.getElementById(`size-pill-${idx}`);
+        if (pill) {
+          const szText = getItemSizeForQuality(item, quality);
+          pill.textContent = `Est. Size: ${szText}`;
+        }
+      });
+    }
+
     function renderMediaSelection(data) {
       const card = document.getElementById('selectionCard');
       const title = document.getElementById('mediaTitle');
       const subtitle = document.getElementById('mediaSubtitle');
       const list = document.getElementById('videoList');
+      const quality = document.getElementById('qualitySelect').value;
 
       title.textContent = data.title;
       subtitle.textContent = `${data.channel} • ${data.count} ${data.type === 'playlist' ? 'videos in playlist' : 'video'}`;
@@ -624,7 +740,6 @@
       selectedIndices.clear();
 
       data.entries.forEach((item, idx) => {
-        // Select all by default
         selectedIndices.add(idx);
 
         const row = document.createElement('div');
@@ -658,7 +773,21 @@
 
         const subtext = document.createElement('div');
         subtext.className = 'video-subtext';
-        subtext.innerHTML = `<span>Duration: ${item.duration_formatted}</span><span>${item.channel}</span>`;
+
+        const durSpan = document.createElement('span');
+        durSpan.textContent = `Duration: ${item.duration_formatted}`;
+
+        const chanSpan = document.createElement('span');
+        chanSpan.textContent = item.channel;
+
+        const sizeSpan = document.createElement('span');
+        sizeSpan.className = 'size-pill';
+        sizeSpan.id = `size-pill-${idx}`;
+        sizeSpan.textContent = `Est. Size: ${getItemSizeForQuality(item, quality)}`;
+
+        subtext.appendChild(durSpan);
+        subtext.appendChild(sizeSpan);
+        subtext.appendChild(chanSpan);
 
         details.appendChild(videoTitle);
         details.appendChild(subtext);
@@ -711,12 +840,30 @@
     function updateSelectionUI() {
       const count = selectedIndices.size;
       const total = currentMediaData ? currentMediaData.entries.length : 0;
+      const quality = document.getElementById('qualitySelect').value;
+
+      let totalBytes = 0;
+      if (currentMediaData) {
+        selectedIndices.forEach(idx => {
+          const item = currentMediaData.entries[idx];
+          if (item) {
+            totalBytes += getItemBytesForQuality(item, quality);
+          }
+        });
+      }
+
       document.getElementById('selectedCountBadge').textContent = `${count} of ${total} Selected`;
-      document.getElementById('downloadBtnCount').textContent = count;
-      document.getElementById('totalSelectionText').textContent = count === 0
+
+      const totalSizeStr = totalBytes > 0 ? ` • Est. Total: <strong>~${formatBytes(totalBytes)}</strong>` : '';
+      const btnSizeStr = totalBytes > 0 ? ` • ~${formatBytes(totalBytes)}` : '';
+
+      document.getElementById('totalSelectionText').innerHTML = count === 0
         ? 'Please select at least one video to proceed.'
-        : `Ready to download ${count} selected video(s).`;
-      document.getElementById('downloadBtn').disabled = (count === 0);
+        : `Ready to download <strong>${count}</strong> selected video(s)${totalSizeStr}`;
+
+      const btn = document.getElementById('downloadBtn');
+      btn.innerHTML = `Download Selected (${count}${btnSizeStr})`;
+      btn.disabled = (count === 0);
     }
 
     async function startDownload() {
@@ -769,7 +916,7 @@
 
     function startPolling(jobId) {
       if (pollInterval) clearInterval(pollInterval);
-      pollInterval = setInterval(() => pollJobStatus(jobId), 700);
+      pollInterval = setInterval(() => pollJobStatus(jobId), 600);
     }
 
     async function pollJobStatus(jobId) {
@@ -787,9 +934,10 @@
         badge.textContent = `${Math.round(totalPercent)}%`;
 
         document.getElementById('progressTitle').textContent = `Downloading (${data.current_index}/${data.total_items})`;
-        document.getElementById('progressItemIndex').textContent = `Item ${data.current_index} of ${data.total_items}: ${data.current_title || ''}`;
-        document.getElementById('progressSpeed').textContent = data.speed ? `Speed: ${data.speed}` : 'Speed: calculating...';
-        document.getElementById('progressEta').textContent = data.eta ? `ETA: ${data.eta}` : 'ETA: --';
+        document.getElementById('progressItemIndex').textContent = `${data.current_index} of ${data.total_items}`;
+        document.getElementById('progressSize').textContent = data.size_progress || (data.item_downloaded_str ? data.item_downloaded_str : 'Calculating...');
+        document.getElementById('progressSpeed').textContent = data.speed ? data.speed : 'Calculating...';
+        document.getElementById('progressEta').textContent = data.eta ? data.eta : '--';
         document.getElementById('statusMessage').textContent = data.status_message || 'Processing...';
 
         if (data.status === 'completed') {

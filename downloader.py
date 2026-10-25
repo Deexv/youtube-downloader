@@ -1,5 +1,5 @@
 """Core download manager and yt-dlp integration.
-Handles video and playlist extraction, ffmpeg stream merging, quality selection, and thread-safe progress tracking.
+Handles video and playlist extraction, ffmpeg stream merging, quality selection, size estimation, and thread-safe progress tracking.
 """
 
 import os
@@ -46,6 +46,75 @@ def format_duration(seconds: Optional[int]) -> str:
     return f"{m:02d}:{s:02d}"
 
 
+def format_bytes(num_bytes: Optional[int]) -> str:
+    """Format byte count to readable string with units (B, KB, MB, GB)."""
+    if num_bytes is None or num_bytes <= 0:
+        return "0 B"
+    val = float(num_bytes)
+    for unit in ["B", "KB", "MB", "GB"]:
+        if val < 1024.0:
+            return f"{val:.1f} {unit}" if unit != "B" else f"{int(val)} B"
+        val /= 1024.0
+    return f"{val:.2f} TB"
+
+
+def estimate_quality_sizes_from_duration(duration: Optional[int]) -> Dict[str, int]:
+    """
+    Estimate file size in bytes for various qualities given video duration in seconds.
+    Based on standard YouTube average video+audio bitrates.
+    """
+    if not duration or duration <= 0:
+        return {}
+
+    rates = {
+        "2160": 1150000,
+        "1440": 580000,
+        "1080": 160000,
+        "720": 98000,
+        "480": 62000,
+        "360": 42000,
+        "audio": 16500,
+        "best": 1150000,
+    }
+
+    return {q: int(rate * duration) for q, rate in rates.items()}
+
+
+def compute_single_video_sizes(raw_info: Dict[str, Any], ydl: yt_dlp.YoutubeDL) -> Dict[str, int]:
+    """
+    Compute accurate or approximate file size for each quality setting from actual format stream metadata.
+    """
+    qualities = ["2160", "1440", "1080", "720", "480", "360", "audio", "best"]
+    size_map: Dict[str, int] = {}
+    duration = raw_info.get("duration") or 0
+
+    for q in qualities:
+        if q == "audio":
+            fmt_str = "bestaudio/best"
+        elif q == "best":
+            fmt_str = "bestvideo+bestaudio/best"
+        else:
+            fmt_str = f"bestvideo[height<={q}]+bestaudio/best[height<={q}]/best"
+
+        try:
+            selector = ydl.build_format_selector(fmt_str)
+            matched = list(selector(raw_info))
+            total_bytes = 0
+            for f in matched:
+                sz = f.get("filesize") or f.get("filesize_approx")
+                if not sz and duration > 0:
+                    bitrate = f.get("tbr") or ((f.get("vbr") or 0) + (f.get("abr") or 0))
+                    if bitrate:
+                        sz = int((bitrate * 1024 / 8) * duration)
+                total_bytes += (sz or 0)
+            if total_bytes > 0:
+                size_map[q] = total_bytes
+        except Exception:
+            pass
+
+    return size_map
+
+
 def get_base_ydl_opts() -> Dict[str, Any]:
     """Return common yt-dlp configuration options."""
     ffmpeg_bin = get_ffmpeg_path()
@@ -54,11 +123,6 @@ def get_base_ydl_opts() -> Dict[str, Any]:
     opts: Dict[str, Any] = {
         "quiet": True,
         "no_warnings": False,
-        "extractor_args": {
-            "youtube": {
-                "player_client": ["android", "ios", "web"]
-            }
-        },
         "remote_components": ["ejs:github"]
     }
 
@@ -76,7 +140,7 @@ def get_base_ydl_opts() -> Dict[str, Any]:
 def extract_media_info(url: str, cookies_browser: Optional[str] = None) -> Dict[str, Any]:
     """
     Extract video or playlist information from a given URL without downloading.
-    Returns normalized structure with entries and metadata.
+    Returns normalized structure with entries, thumbnails, duration, and download size maps.
     """
     opts = get_base_ydl_opts()
     opts["extract_flat"] = "in_playlist"
@@ -91,7 +155,6 @@ def extract_media_info(url: str, cookies_browser: Optional[str] = None) -> Dict[
     if not raw_info:
         raise ValueError("No video or playlist found for this URL.")
 
-    # Check if the result is a playlist
     is_playlist = raw_info.get("_type") == "playlist" or "entries" in raw_info
 
     entries: List[Dict[str, Any]] = []
@@ -106,22 +169,27 @@ def extract_media_info(url: str, cookies_browser: Optional[str] = None) -> Dict[
             if not video_url and entry_id:
                 video_url = f"https://www.youtube.com/watch?v={entry_id}"
 
-            # Best available thumbnail
             thumbnail = item.get("thumbnail")
             if not thumbnail and item.get("thumbnails"):
                 thumbnail = item["thumbnails"][-1].get("url")
             if not thumbnail and entry_id:
                 thumbnail = f"https://i.ytimg.com/vi/{entry_id}/hqdefault.jpg"
 
+            duration = item.get("duration")
+            estimated_sizes = estimate_quality_sizes_from_duration(duration)
+            formatted_sizes = {q: format_bytes(sz) for q, sz in estimated_sizes.items()}
+
             entries.append({
                 "id": entry_id,
                 "index": index,
                 "title": item.get("title") or f"Video #{index}",
                 "url": video_url,
-                "duration": item.get("duration"),
-                "duration_formatted": format_duration(item.get("duration")),
+                "duration": duration,
+                "duration_formatted": format_duration(duration),
                 "thumbnail": thumbnail or "",
                 "channel": item.get("channel") or item.get("uploader") or "Unknown Channel",
+                "sizes": estimated_sizes,
+                "sizes_formatted": formatted_sizes,
             })
 
         return {
@@ -133,7 +201,7 @@ def extract_media_info(url: str, cookies_browser: Optional[str] = None) -> Dict[
             "entries": entries,
         }
 
-    # Single video
+    # Single video with exact format inspection
     video_id = raw_info.get("id") or ""
     video_url = raw_info.get("webpage_url") or url
     thumbnail = raw_info.get("thumbnail")
@@ -142,15 +210,27 @@ def extract_media_info(url: str, cookies_browser: Optional[str] = None) -> Dict[
     if not thumbnail and video_id:
         thumbnail = f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg"
 
+    duration = raw_info.get("duration")
+
+    with yt_dlp.YoutubeDL(opts) as ydl:
+        exact_sizes = compute_single_video_sizes(raw_info, ydl)
+
+    if not exact_sizes and duration:
+        exact_sizes = estimate_quality_sizes_from_duration(duration)
+
+    formatted_sizes = {q: format_bytes(sz) for q, sz in exact_sizes.items()}
+
     single_entry = {
         "id": video_id,
         "index": 1,
         "title": raw_info.get("title") or "YouTube Video",
         "url": video_url,
-        "duration": raw_info.get("duration"),
-        "duration_formatted": format_duration(raw_info.get("duration")),
+        "duration": duration,
+        "duration_formatted": format_duration(duration),
         "thumbnail": thumbnail or "",
         "channel": raw_info.get("channel") or raw_info.get("uploader") or "Unknown Channel",
+        "sizes": exact_sizes,
+        "sizes_formatted": formatted_sizes,
     }
 
     return {
@@ -185,6 +265,14 @@ class DownloadJob:
         self.total_percent = 0.0
         self.speed_str = ""
         self.eta_str = ""
+        self.item_downloaded_bytes = 0
+        self.item_total_bytes = 0
+        self.item_downloaded_str = "0 B"
+        self.item_total_str = "0 B"
+        self.size_progress_str = ""
+        self.batch_completed_bytes = 0
+        self.batch_total_bytes = 0
+        self.batch_size_str = ""
         self.completed_items: List[str] = []
         self.failed_items: List[Dict[str, str]] = []
         self.status_message = "Waiting in queue"
@@ -211,6 +299,12 @@ class DownloadJob:
                 "total_percent": round(self.total_percent, 1),
                 "speed": self.speed_str,
                 "eta": self.eta_str,
+                "item_downloaded_bytes": self.item_downloaded_bytes,
+                "item_total_bytes": self.item_total_bytes,
+                "item_downloaded_str": self.item_downloaded_str,
+                "item_total_str": self.item_total_str,
+                "size_progress": self.size_progress_str,
+                "batch_size_str": self.batch_size_str,
                 "completed_count": len(self.completed_items),
                 "failed_count": len(self.failed_items),
                 "failed_items": list(self.failed_items),
@@ -237,6 +331,12 @@ class DownloadManager:
         job_id = str(uuid.uuid4())
         job = DownloadJob(job_id, items, quality, output_dir)
 
+        est_total = 0
+        for itm in items:
+            sizes = itm.get("sizes") or {}
+            est_total += sizes.get(quality, sizes.get("best", 0))
+        job.batch_total_bytes = est_total
+
         with self.lock:
             self.jobs[job_id] = job
 
@@ -258,11 +358,6 @@ class DownloadManager:
 
     def _get_format_spec(self, quality: str) -> Dict[str, Any]:
         """Generate format string and postprocessors according to quality selection."""
-        # Quality options:
-        # 'best' -> best available video + best audio merged with ffmpeg
-        # '2160' / '1440' / '1080' / '720' / '480' / '360' -> capped height + best audio merged
-        # 'audio' -> extract audio only to mp3
-
         if quality == "audio":
             return {
                 "format": "bestaudio/best",
@@ -320,7 +415,17 @@ class DownloadManager:
                 job.current_title = video_title
                 job.current_item_id = video_id
                 job.item_percent = 0.0
+                job.item_downloaded_bytes = 0
+                job.item_total_bytes = 0
+                job.item_downloaded_str = "0 B"
+                job.item_total_str = "0 B"
+                job.size_progress_str = "Preparing..."
                 job.status_message = f"Downloading item {idx} of {total_items}: {video_title}"
+
+            stream_state = {
+                "completed_stream_bytes": 0,
+                "current_stream_total": 0,
+            }
 
             def progress_hook(d: Dict[str, Any]):
                 if job.is_cancelled:
@@ -328,26 +433,43 @@ class DownloadManager:
 
                 status = d.get("status")
                 if status == "downloading":
-                    total_bytes = d.get("total_bytes") or d.get("total_bytes_estimate") or 0
-                    downloaded = d.get("downloaded_bytes") or 0
-                    percent = (downloaded / total_bytes * 100) if total_bytes > 0 else 0.0
+                    stream_downloaded = d.get("downloaded_bytes") or 0
+                    stream_total = d.get("total_bytes") or d.get("total_bytes_estimate") or 0
+                    stream_state["current_stream_total"] = stream_total
 
+                    total_item_downloaded = stream_state["completed_stream_bytes"] + stream_downloaded
+                    total_item_expected = stream_state["completed_stream_bytes"] + stream_total
+
+                    percent = (stream_downloaded / stream_total * 100) if stream_total > 0 else 0.0
                     speed = d.get("_speed_str") or ""
                     eta = d.get("_eta_str") or ""
+
+                    downloaded_str = format_bytes(total_item_downloaded)
+                    expected_str = format_bytes(total_item_expected) if total_item_expected > 0 else "estimating..."
+
+                    size_prog = f"{downloaded_str} / {expected_str}"
 
                     with job.lock:
                         job.item_percent = percent
                         job.speed_str = speed
                         job.eta_str = eta
-                        # Calculate total progress
+                        job.item_downloaded_bytes = total_item_downloaded
+                        job.item_total_bytes = total_item_expected
+                        job.item_downloaded_str = downloaded_str
+                        job.item_total_str = expected_str
+                        job.size_progress_str = size_prog
+
                         completed_frac = (idx - 1) + (percent / 100.0)
                         job.total_percent = min(100.0, (completed_frac / total_items) * 100.0)
-                        job.status_message = f"Downloading {idx}/{total_items}: {video_title} ({percent:.1f}%)"
+                        job.status_message = f"Downloading {idx}/{total_items}: {video_title} ({size_prog})"
 
                 elif status == "finished":
+                    stream_state["completed_stream_bytes"] += stream_state["current_stream_total"]
                     with job.lock:
                         job.item_percent = 100.0
-                        job.status_message = f"Processing audio & video stream merge for {video_title}..."
+                        total_done_str = format_bytes(stream_state["completed_stream_bytes"])
+                        job.size_progress_str = f"{total_done_str} (downloaded)"
+                        job.status_message = f"Processing audio & video stream merge for {video_title} ({total_done_str})..."
 
             def postprocessor_hook(d: Dict[str, Any]):
                 if job.is_cancelled:
@@ -355,7 +477,7 @@ class DownloadManager:
                 status = d.get("status")
                 if status == "started":
                     with job.lock:
-                        job.status_message = f"Merging video and audio via ffmpeg for: {video_title}..."
+                        job.status_message = f"Merging video and audio via FFmpeg ({job.item_total_str}) for: {video_title}..."
                 elif status == "finished":
                     with job.lock:
                         job.status_message = f"Finished merging {video_title}."
@@ -365,7 +487,6 @@ class DownloadManager:
             ydl_opts["postprocessor_hooks"] = [postprocessor_hook]
             ydl_opts["outtmpl"] = os.path.join(job.output_dir, "%(title)s [%(id)s].%(ext)s")
 
-            # Apply format specifications
             for k, v in format_spec.items():
                 ydl_opts[k] = v
 
@@ -375,6 +496,7 @@ class DownloadManager:
 
                 with job.lock:
                     job.completed_items.append(video_id)
+                    job.batch_completed_bytes += stream_state["completed_stream_bytes"]
                     completed_frac = float(idx)
                     job.total_percent = min(100.0, (completed_frac / total_items) * 100.0)
 
@@ -386,7 +508,6 @@ class DownloadManager:
 
             except Exception as e:
                 err_msg = str(e)
-                # Remove ANSI escape color sequences if present
                 if "\x1b" in err_msg:
                     import re
                     err_msg = re.sub(r"\x1b\[[0-9;]*m", "", err_msg)
@@ -401,12 +522,13 @@ class DownloadManager:
             if not job.is_cancelled:
                 job.total_percent = 100.0
                 job.item_percent = 100.0
+                total_downloaded_str = format_bytes(job.batch_completed_bytes)
                 if len(job.failed_items) == 0:
                     job.status = "completed"
-                    job.status_message = f"All {total_items} item(s) downloaded successfully."
+                    job.status_message = f"All {total_items} item(s) downloaded successfully ({total_downloaded_str} total)."
                 elif len(job.completed_items) > 0:
                     job.status = "completed"
-                    job.status_message = f"Completed with warnings: {len(job.completed_items)} succeeded, {len(job.failed_items)} failed."
+                    job.status_message = f"Completed with warnings: {len(job.completed_items)} succeeded ({total_downloaded_str}), {len(job.failed_items)} failed."
                 else:
                     job.status = "error"
                     job.status_message = "All downloads failed."

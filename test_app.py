@@ -42,6 +42,12 @@ class TestYouTubeDownloader(unittest.TestCase):
         self.assertEqual(media.get("id"), "dQw4w9WgXcQ")
         self.assertEqual(len(media.get("entries")), 1)
         self.assertIn("Never Gonna Give You Up", media.get("title"))
+        entry = media["entries"][0]
+        self.assertIn("sizes", entry)
+        self.assertIn("sizes_formatted", entry)
+        self.assertIn("1080", entry["sizes"])
+        self.assertIn("1080", entry["sizes_formatted"])
+        self.assertGreater(entry["sizes"]["1080"], 0)
 
     def test_fetch_playlist(self):
         # Official Blender Open Movies playlist
@@ -53,6 +59,10 @@ class TestYouTubeDownloader(unittest.TestCase):
         media = data["data"]
         self.assertEqual(media.get("type"), "playlist")
         self.assertGreater(len(media.get("entries")), 1)
+        first_entry = media["entries"][0]
+        self.assertIn("sizes", first_entry)
+        self.assertIn("sizes_formatted", first_entry)
+        self.assertIn("1080", first_entry["sizes_formatted"])
 
     def test_download_flow_and_cancellation(self):
         # Create a download job with a test item
