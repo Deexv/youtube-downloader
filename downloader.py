@@ -124,6 +124,11 @@ def get_base_ydl_opts() -> Dict[str, Any]:
         "quiet": True,
         "no_warnings": False,
         "remote_components": ["ejs:github"],
+        "extractor_args": {
+            "youtube": {
+                "player_client": ["tv_samsung", "web", "web_embedded", "mweb"]
+            }
+        },
         "socket_timeout": 30,
         "retries": 20,
         "fragment_retries": 20,
@@ -376,12 +381,13 @@ class DownloadCancelledException(Exception):
 class DownloadJob:
     """Represents a download job for one or more videos."""
 
-    def __init__(self, job_id: str, items: List[Dict[str, Any]], quality: str, output_dir: str, on_duplicate: str = "auto_rename"):
+    def __init__(self, job_id: str, items: List[Dict[str, Any]], quality: str, output_dir: str, on_duplicate: str = "auto_rename", cookies_browser: Optional[str] = None):
         self.job_id = job_id
         self.items = items
         self.quality = quality
         self.output_dir = output_dir
         self.on_duplicate = on_duplicate
+        self.cookies_browser = cookies_browser
         self.status = "queued"
         self.is_cancelled = False
         self.current_index = 0
@@ -447,7 +453,7 @@ class DownloadManager:
         self.jobs: Dict[str, DownloadJob] = {}
         self.lock = threading.Lock()
 
-    def create_job(self, items: List[Dict[str, Any]], quality: str, output_dir: Optional[str] = None, on_duplicate: str = "auto_rename") -> DownloadJob:
+    def create_job(self, items: List[Dict[str, Any]], quality: str, output_dir: Optional[str] = None, on_duplicate: str = "auto_rename", cookies_browser: Optional[str] = None) -> DownloadJob:
         if not output_dir:
             home = os.path.expanduser("~")
             output_dir = os.path.join(home, "Downloads", "YouTubeDownloads")
@@ -455,7 +461,7 @@ class DownloadManager:
         os.makedirs(output_dir, exist_ok=True)
 
         job_id = str(uuid.uuid4())
-        job = DownloadJob(job_id, items, quality, output_dir, on_duplicate=on_duplicate)
+        job = DownloadJob(job_id, items, quality, output_dir, on_duplicate=on_duplicate, cookies_browser=cookies_browser)
 
         est_total = 0
         for itm in items:
@@ -634,6 +640,9 @@ class DownloadManager:
             ydl_opts["postprocessor_hooks"] = [postprocessor_hook]
             ydl_opts["outtmpl"] = target_outtmpl
 
+            if job.cookies_browser:
+                ydl_opts["cookiesfrombrowser"] = (job.cookies_browser,)
+
             for k, v in format_spec.items():
                 ydl_opts[k] = v
 
@@ -660,14 +669,31 @@ class DownloadManager:
                         import re
                         last_err_msg = re.sub(r"\x1b\[[0-9;]*m", "", last_err_msg)
 
+                    is_bot_check = (
+                        "confirm you’re not a bot" in last_err_msg
+                        or "confirm you're not a bot" in last_err_msg
+                        or "Sign in" in last_err_msg
+                        or "Please sign in" in last_err_msg
+                    )
+
+                    if is_bot_check:
+                        # Auto-switch to alternate client profile on retry
+                        ydl_opts["extractor_args"] = {
+                            "youtube": {
+                                "player_client": ["web_embedded", "mweb", "android"]
+                            }
+                        }
+
                     if attempt < max_retries and not job.is_cancelled:
                         import time
-                        wait_seconds = min(2 * attempt, 8)
+                        wait_seconds = min(2 * attempt, 6)
+                        notice = (
+                            f"YouTube bot challenge detected. Bypassing and resuming in {wait_seconds}s (attempt {attempt}/{max_retries})..."
+                            if is_bot_check
+                            else f"Connection interrupted ({last_err_msg}). Resuming download from where it left off in {wait_seconds}s (attempt {attempt}/{max_retries})..."
+                        )
                         with job.lock:
-                            job.status_message = (
-                                f"Connection interrupted ({last_err_msg}). "
-                                f"Resuming download from where it left off in {wait_seconds}s (attempt {attempt}/{max_retries})..."
-                            )
+                            job.status_message = notice
                         time.sleep(wait_seconds)
                     else:
                         break

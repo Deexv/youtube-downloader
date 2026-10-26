@@ -579,6 +579,18 @@
               <option value="overwrite">Overwrite / Replace existing file</option>
             </select>
           </div>
+
+          <div class="field">
+            <label for="cookiesSelect">Browser Cookies (Anti-Bot / Sign-in)</label>
+            <select id="cookiesSelect">
+              <option value="" selected>None (Auto-Bypass)</option>
+              <option value="chrome">Google Chrome</option>
+              <option value="safari">Safari</option>
+              <option value="firefox">Firefox</option>
+              <option value="brave">Brave</option>
+              <option value="edge">Edge</option>
+            </select>
+          </div>
         </div>
       </form>
     </div>
@@ -688,6 +700,7 @@
       const spinner = document.getElementById('fetchBtnSpinner');
       const btnText = document.getElementById('fetchBtnText');
       const outputDir = document.getElementById('outputDirInput').value.trim();
+      const cookiesBrowser = document.getElementById('cookiesSelect').value || null;
 
       fetchBtn.disabled = true;
       spinner.classList.remove('hidden');
@@ -697,7 +710,7 @@
         const response = await fetch('/api/fetch', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ url, output_dir: outputDir })
+          body: JSON.stringify({ url, output_dir: outputDir, cookies_browser: cookiesBrowser })
         });
         const result = await response.json();
 
@@ -923,6 +936,7 @@
       const quality = document.getElementById('qualitySelect').value;
       const outputDir = document.getElementById('outputDirInput').value.trim();
       const onDuplicate = document.getElementById('duplicateSelect').value;
+      const cookiesBrowser = document.getElementById('cookiesSelect').value || null;
 
       hideAlert();
 
@@ -934,7 +948,8 @@
             items: selectedItems,
             quality: quality,
             output_dir: outputDir,
-            on_duplicate: onDuplicate
+            on_duplicate: onDuplicate,
+            cookies_browser: cookiesBrowser
           })
         });
 

@@ -61,6 +61,7 @@ def start_download():
     quality = data.get("quality") or "best"
     output_dir = (data.get("output_dir") or "").strip() or DEFAULT_DOWNLOAD_DIR
     on_duplicate = data.get("on_duplicate") or "auto_rename"
+    cookies_browser = data.get("cookies_browser") or None
 
     if not items:
         return jsonify({"success": False, "error": "No videos selected for download."}), 400
@@ -70,6 +71,7 @@ def start_download():
         quality=quality,
         output_dir=output_dir,
         on_duplicate=on_duplicate,
+        cookies_browser=cookies_browser,
     )
     return jsonify({
         "success": True,
